@@ -634,6 +634,7 @@ async function bulkSendEmail() {
 
 let bulkWaQueue = [];
 let bulkWaIndex = 0;
+let bulkWaRunning = false;
 
 function bulkOpenWhatsApp() {
   if (selectedLeadIds.size === 0) return toast('Select leads first', 'error');
@@ -644,58 +645,80 @@ function bulkOpenWhatsApp() {
     const selected = data.leads.filter(l => selectedLeadIds.has(l.id) && l.phone);
     if (selected.length === 0) return toast('No selected leads have phone numbers', 'error');
 
-    // Build queue of wa.me links
     bulkWaQueue = selected.map(lead => {
       const phone = lead.phone.replace(/[\s\-\(\)\+]/g, '');
+      const landingUrl = `${window.location.origin}/landing/${lead.id}`;
       let msg;
       if (serviceType === 'website') {
-        msg = `Hi! I came across ${lead.name} and noticed you don't have a website yet. In 2026, 70% of customers search online before visiting. I can build you a professional website with online booking, WhatsApp chat, and Google optimization. Would you like to see a quick preview?`;
+        msg = `Hi! I came across ${lead.name} and noticed you don't have a website yet. In 2026, 70% of customers search online before visiting. I can build you a professional website with online booking, WhatsApp chat, and Google optimization.
+
+I've prepared a quick preview for ${lead.name}:
+🔗 ${landingUrl}
+
+Would you be open to a quick 5-minute call to discuss?`;
       } else {
-        msg = `Hi! I came across ${lead.name} online — great reviews! I help businesses like yours automate customer communication on WhatsApp — bookings, orders, support, all automated. Would you be open to a free 5-minute demo?`;
+        msg = `Hi! I saw ${lead.name} online — great reviews! I help businesses like yours automate customer communication on WhatsApp — bookings, orders, support, all automated.
+
+I've prepared a quick preview of what your system would look like:
+🔗 ${landingUrl}
+
+Would you be open to a free 5-minute demo?`;
       }
-      return { lead, url: `https://wa.me/${phone}?text=${encodeURIComponent(msg)}` };
+      return { lead, phone, msg, url: `https://wa.me/${phone}?text=${encodeURIComponent(msg)}` };
     });
     bulkWaIndex = 0;
+    bulkWaRunning = true;
 
-    // Show WhatsApp sender panel
-    showWaSenderPanel();
+    const delay = parseInt(prompt(`Sending to ${selected.length} leads.\n\nDelay between each (seconds):\n(Recommended: 8-15 seconds to avoid WhatsApp blocking)`, '10'));
+    if (isNaN(delay) || delay < 3) return toast('Minimum 3 seconds delay required', 'error');
+
+    toast(`Starting bulk WhatsApp — ${selected.length} messages, ${delay}s delay`, 'info');
+    runBulkWhatsApp(delay * 1000);
   });
 }
 
-function showWaSenderPanel() {
-  const item = bulkWaQueue[bulkWaIndex];
-  if (!item) return toast('All WhatsApp messages done!', 'success');
+function runBulkWhatsApp(delayMs) {
+  if (!bulkWaRunning || bulkWaIndex >= bulkWaQueue.length) {
+    const sent = bulkWaIndex;
+    bulkWaRunning = false;
+    document.getElementById('bulk-status').innerHTML = `<span style="color:var(--success);font-weight:600;">✅ Done! Opened ${sent} WhatsApp chats</span>`;
+    toast(`Bulk WhatsApp done! Opened ${sent} chats`, 'success');
+    deselectAllLeads();
+    loadLeads();
+    return;
+  }
 
+  const item = bulkWaQueue[bulkWaIndex];
   const statusEl = document.getElementById('bulk-status');
   statusEl.innerHTML = `
-    <div style="display:flex;align-items:center;gap:10px;padding:8px 0;">
-      <strong>WhatsApp ${bulkWaIndex + 1}/${bulkWaQueue.length}:</strong>
-      <span>${item.lead.name}</span>
-      <a href="${item.url}" target="_blank" class="btn btn-sm" style="background:#25d366;color:white;text-decoration:none;"
-         onclick="onWaSent()">
-        💬 Open & Send
-      </a>
-      <button class="btn btn-outline btn-sm" onclick="skipWaLead()">Skip</button>
-      <button class="btn btn-danger btn-sm" onclick="stopBulkWa()">Stop</button>
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 0;flex-wrap:wrap;">
+      <div style="background:var(--bg);padding:6px 14px;border-radius:8px;font-weight:700;color:var(--primary);">
+        ${bulkWaIndex + 1} / ${bulkWaQueue.length}
+      </div>
+      <span style="font-weight:600;">${item.lead.name}</span>
+      <span style="color:var(--text-light);font-size:13px;">${item.phone}</span>
+      <span style="color:var(--accent);font-size:13px;">Opening...</span>
+      <button class="btn btn-danger btn-sm" onclick="stopBulkWa()">⏹ Stop</button>
+    </div>
+    <div class="progress-bar-bg" style="margin-top:8px;">
+      <div class="progress-bar-fill" style="width:${((bulkWaIndex + 1) / bulkWaQueue.length) * 100}%"></div>
     </div>
   `;
-}
 
-function onWaSent() {
-  const item = bulkWaQueue[bulkWaIndex];
-  if (item) socket.emit('whatsapp-opened', { leadId: item.lead.id });
-  bulkWaIndex++;
-  setTimeout(() => showWaSenderPanel(), 500);
-}
+  // Open WhatsApp
+  window.open(item.url, '_blank');
+  socket.emit('whatsapp-opened', { leadId: item.lead.id });
 
-function skipWaLead() {
   bulkWaIndex++;
-  showWaSenderPanel();
+
+  // Auto-continue after delay
+  setTimeout(() => runBulkWhatsApp(delayMs), delayMs);
 }
 
 function stopBulkWa() {
-  document.getElementById('bulk-status').textContent = `Stopped. Sent ${bulkWaIndex} of ${bulkWaQueue.length}`;
-  bulkWaQueue = [];
+  bulkWaRunning = false;
+  document.getElementById('bulk-status').innerHTML = `<span style="color:var(--warning);">⏹ Stopped at ${bulkWaIndex} / ${bulkWaQueue.length}</span>`;
+  toast(`Stopped. Sent ${bulkWaIndex} of ${bulkWaQueue.length}`, 'info');
 }
 
 // Close modal on click outside
