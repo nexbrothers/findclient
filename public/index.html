@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Find Client — Lead Discovery Dashboard</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-brand">
+      <h2>🎯 FindClient</h2>
+      <span>Lead Discovery Engine</span>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-item active" data-page="dashboard">
+        <span class="icon">📊</span>
+        <span class="nav-label">Dashboard</span>
+      </div>
+      <div class="nav-item" data-page="search">
+        <span class="icon">🔍</span>
+        <span class="nav-label">Find Leads</span>
+      </div>
+      <div class="nav-item" data-page="leads">
+        <span class="icon">👥</span>
+        <span class="nav-label">All Leads</span>
+        <span class="badge" id="leads-count">0</span>
+      </div>
+      <div class="nav-item" data-page="outreach">
+        <span class="icon">📨</span>
+        <span class="nav-label">Outreach</span>
+      </div>
+      <div class="nav-item" data-page="settings">
+        <span class="icon">⚙️</span>
+        <span class="nav-label">Settings</span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="main">
+
+    <!-- ===== DASHBOARD PAGE ===== -->
+    <div class="page active" id="page-dashboard">
+      <div class="page-header">
+        <h1>Dashboard</h1>
+        <button class="btn btn-primary" onclick="navigateTo('search')">🔍 Find New Leads</button>
+      </div>
+
+      <div class="stat-cards" id="stats-cards">
+        <div class="stat-card"><div class="label">Total Leads</div><div class="value" id="stat-total">0</div></div>
+        <div class="stat-card green"><div class="label">New Leads</div><div class="value" id="stat-new">0</div></div>
+        <div class="stat-card blue"><div class="label">Contacted</div><div class="value" id="stat-contacted">0</div></div>
+        <div class="stat-card orange"><div class="label">Replied</div><div class="value" id="stat-replied">0</div></div>
+        <div class="stat-card green"><div class="label">Converted</div><div class="value" id="stat-converted">0</div></div>
+        <div class="stat-card blue"><div class="label">Emails Sent</div><div class="value" id="stat-emails">0</div></div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+        <div class="panel">
+          <div class="panel-header"><h3>Leads by Category</h3></div>
+          <div class="panel-body" id="chart-category"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>Leads by City</h3></div>
+          <div class="panel-body" id="chart-city"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header"><h3>Recent Activity</h3></div>
+        <div class="panel-body" id="recent-activity">
+          <div class="empty-state"><div class="icon">📭</div><p>No activity yet. Start by finding leads!</p></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== SEARCH PAGE ===== -->
+    <div class="page" id="page-search">
+      <div class="page-header">
+        <h1>🔍 Find Leads</h1>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <h3>Select Business Categories</h3>
+          <button class="btn btn-outline btn-sm" onclick="toggleAllCategories()">Select All</button>
+        </div>
+        <div class="panel-body">
+          <div class="checkbox-grid" id="category-checkboxes"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header"><h3>Select Countries & Cities</h3></div>
+        <div class="panel-body">
+          <div class="form-group">
+            <label>Quick Select Region</label>
+            <select id="region-select" onchange="selectRegion(this.value)">
+              <option value="">Choose a region...</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Cities (comma separated)</label>
+            <input type="text" id="cities-input" placeholder="Dubai, London, Toronto, Singapore...">
+          </div>
+          <div class="form-group">
+            <label>Max results per search (per city + category)</label>
+            <input type="number" id="max-results" value="20" min="5" max="60">
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 12px; margin-bottom: 20px;">
+        <button class="btn btn-accent btn-lg" id="btn-start-search" onclick="startSearch()">🚀 Start Finding Leads</button>
+        <button class="btn btn-danger btn-lg" id="btn-stop-search" onclick="stopSearch()" style="display:none;">⏹ Stop</button>
+      </div>
+
+      <!-- Search Progress -->
+      <div class="panel" id="search-progress-panel" style="display: none;">
+        <div class="panel-header"><h3>Search Progress</h3></div>
+        <div class="panel-body">
+          <div class="progress-container">
+            <div class="progress-bar-bg"><div class="progress-bar-fill" id="search-progress-bar" style="width: 0%"></div></div>
+            <div class="progress-text" id="search-progress-text">Starting...</div>
+          </div>
+          <div id="search-live-results" style="margin-top: 16px; max-height: 400px; overflow-y: auto;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== LEADS PAGE ===== -->
+    <div class="page" id="page-leads">
+      <div class="page-header">
+        <h1>👥 All Leads</h1>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-primary" onclick="analyzeWebsites()">🔬 Analyze Websites</button>
+          <button class="btn btn-accent" onclick="generateAllLandingPages()">📄 Generate Landing Pages</button>
+        </div>
+      </div>
+
+      <div class="filters-bar">
+        <input type="text" id="filter-search" placeholder="Search by name..." oninput="loadLeads()">
+        <select id="filter-category" onchange="loadLeads()"><option value="">All Categories</option></select>
+        <select id="filter-city" onchange="loadLeads()"><option value="">All Cities</option></select>
+        <select id="filter-status" onchange="loadLeads()">
+          <option value="">All Status</option>
+          <option value="new">New</option>
+          <option value="contacted">Contacted</option>
+          <option value="replied">Replied</option>
+          <option value="converted">Converted</option>
+          <option value="rejected">Rejected</option>
+        </select>
+        <select id="filter-sort" onchange="loadLeads()">
+          <option value="score">Sort: Score ↓</option>
+          <option value="rating">Sort: Rating ↓</option>
+          <option value="name">Sort: Name A-Z</option>
+        </select>
+      </div>
+
+      <!-- Analyze Progress -->
+      <div class="panel" id="analyze-progress-panel" style="display: none;">
+        <div class="panel-body">
+          <div class="progress-container">
+            <div class="progress-bar-bg"><div class="progress-bar-fill" id="analyze-progress-bar" style="width: 0%"></div></div>
+            <div class="progress-text" id="analyze-progress-text">Analyzing...</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-body">
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Score</th>
+                  <th>Business</th>
+                  <th>Category</th>
+                  <th>City</th>
+                  <th>Phone</th>
+                  <th>Rating</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="leads-table-body">
+                <tr><td colspan="8"><div class="empty-state"><div class="icon">🔍</div><p>No leads yet. Go to Find Leads to start!</p></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div id="leads-pagination" style="display: flex; justify-content: center; gap: 8px; margin-top: 16px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== OUTREACH PAGE ===== -->
+    <div class="page" id="page-outreach">
+      <div class="page-header">
+        <h1>📨 Outreach Center</h1>
+      </div>
+
+      <div class="stat-cards">
+        <div class="stat-card green"><div class="label">WhatsApp Sent</div><div class="value" id="stat-wa-sent">0</div></div>
+        <div class="stat-card blue"><div class="label">Emails Sent</div><div class="value" id="stat-em-sent">0</div></div>
+        <div class="stat-card orange"><div class="label">Landing Pages</div><div class="value" id="stat-lp-count">0</div></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header"><h3>Sent Log</h3></div>
+        <div class="panel-body">
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Business</th><th>Type</th><th>Sent At</th></tr></thead>
+              <tbody id="sent-log-body">
+                <tr><td colspan="3"><div class="empty-state"><p>No messages sent yet.</p></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== SETTINGS PAGE ===== -->
+    <div class="page" id="page-settings">
+      <div class="page-header"><h1>⚙️ Settings</h1></div>
+
+      <div class="panel">
+        <div class="panel-header"><h3>Google Places API</h3></div>
+        <div class="panel-body">
+          <div class="form-group">
+            <label>API Key</label>
+            <input type="password" id="cfg-google-key" placeholder="Your Google Places API Key">
+          </div>
+          <p style="font-size: 13px; color: var(--text-light); margin-bottom: 12px;">
+            Get your key from <a href="https://console.cloud.google.com/apis/credentials" target="_blank">Google Cloud Console</a>.
+            Enable "Places API" and "Places API (New)".
+          </p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header"><h3>Email Configuration</h3></div>
+        <div class="panel-body">
+          <div class="form-group">
+            <label>Email Address</label>
+            <input type="email" id="cfg-email-user" placeholder="your-email@gmail.com">
+          </div>
+          <div class="form-group">
+            <label>App Password</label>
+            <input type="password" id="cfg-email-pass" placeholder="Gmail App Password">
+          </div>
+          <div class="form-group">
+            <label>From Name</label>
+            <input type="text" id="cfg-email-name" placeholder="NexBrothers">
+          </div>
+        </div>
+      </div>
+
+      <button class="btn btn-primary btn-lg" onclick="saveSettings()">💾 Save Settings</button>
+    </div>
+
+  </div><!-- end .main -->
+
+  <!-- Message Preview Modal -->
+  <div class="modal-overlay" id="message-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">Message Preview</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="tabs">
+          <div class="tab active" data-tab="whatsapp" onclick="switchTab(this, 'whatsapp')">💬 WhatsApp</div>
+          <div class="tab" data-tab="email" onclick="switchTab(this, 'email')">📧 Email</div>
+          <div class="tab" data-tab="landing" onclick="switchTab(this, 'landing')">📄 Landing Page</div>
+        </div>
+        <div id="tab-whatsapp">
+          <div class="message-preview" id="modal-wa-message"></div>
+          <div style="margin-top: 12px; display: flex; gap: 8px;">
+            <a id="modal-wa-link" href="#" target="_blank" class="btn btn-accent btn-lg" style="text-decoration:none;">💬 Open in WhatsApp</a>
+            <button class="btn btn-outline" onclick="copyWaMessage()">📋 Copy Message</button>
+          </div>
+        </div>
+        <div id="tab-email" style="display:none;">
+          <div class="form-group">
+            <label>Subject</label>
+            <input type="text" id="modal-email-subject" readonly>
+          </div>
+          <div class="email-preview" id="modal-email-body"></div>
+          <div style="margin-top: 12px; display: flex; gap: 8px;">
+            <div class="form-group" style="flex: 1; margin: 0;">
+              <input type="email" id="modal-email-to" placeholder="Enter recipient email...">
+            </div>
+            <button class="btn btn-primary btn-lg" onclick="sendEmailFromModal()">📧 Send Email</button>
+          </div>
+        </div>
+        <div id="tab-landing" style="display:none;">
+          <div style="margin-bottom: 12px; display: flex; gap: 8px; align-items: center;">
+            <input type="text" id="modal-landing-url" readonly style="flex:1;">
+            <button class="btn btn-outline" onclick="copyLandingUrl()">📋 Copy</button>
+            <a id="modal-landing-link" href="#" target="_blank" class="btn btn-primary" style="text-decoration:none;">🔗 Open</a>
+          </div>
+          <iframe id="modal-landing-iframe" style="width:100%; height:500px; border: 1px solid var(--border); border-radius: 8px;"></iframe>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

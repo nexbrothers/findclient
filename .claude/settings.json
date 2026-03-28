@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod +x /home/anuj/Desktop/nexBrotherss/find-client/deploy.sh)"
+    ]
+  }
+}
