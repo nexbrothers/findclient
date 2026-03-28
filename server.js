@@ -23,11 +23,34 @@ const BASE_URL = process.env.RENDER_EXTERNAL_URL || process.env.BASE_URL || `htt
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ===== Data Helpers =====
+// ===== Data Helpers (MongoDB + File Fallback) =====
+const { MongoClient } = require('mongodb');
+
 const DATA_DIR = path.join(__dirname, 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(path.join(DATA_DIR, 'landing-pages'), { recursive: true });
 
+// MongoDB connection
+let db = null;
+const MONGO_URI = process.env.MONGO_URI || '';
+
+async function connectDB() {
+  if (!MONGO_URI) {
+    console.log('⚠️  No MONGO_URI set — using local file storage (data lost on Render redeploy)');
+    return;
+  }
+  try {
+    const client = new MongoClient(MONGO_URI);
+    await client.connect();
+    db = client.db('findclient');
+    console.log('✅ Connected to MongoDB Atlas');
+  } catch (err) {
+    console.error('❌ MongoDB connection failed:', err.message);
+    db = null;
+  }
+}
+
+// --- File helpers (fallback) ---
 function readJSON(file, defaultVal = []) {
   const filePath = path.join(DATA_DIR, file);
   try {
@@ -40,20 +63,71 @@ function writeJSON(file, data) {
   fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(data, null, 2), 'utf-8');
 }
 
-function getLeads() { return readJSON('leads.json', []); }
-function saveLeads(leads) { writeJSON('leads.json', leads); }
-function getSentLog() { return readJSON('sent_log.json', []); }
-function saveSentLog(log) { writeJSON('sent_log.json', log); }
+// --- Unified data functions (MongoDB if available, else file) ---
+async function getLeads() {
+  if (db) {
+    return await db.collection('leads').find({}).toArray();
+  }
+  return readJSON('leads.json', []);
+}
+
+async function saveLeads(leads) {
+  if (db) {
+    await db.collection('leads').deleteMany({});
+    if (leads.length > 0) await db.collection('leads').insertMany(leads);
+    return;
+  }
+  writeJSON('leads.json', leads);
+}
+
+async function saveLead(lead) {
+  if (db) {
+    await db.collection('leads').updateOne({ id: lead.id }, { $set: lead }, { upsert: true });
+    return;
+  }
+  const leads = readJSON('leads.json', []);
+  const idx = leads.findIndex(l => l.id === lead.id);
+  if (idx !== -1) leads[idx] = lead; else leads.push(lead);
+  writeJSON('leads.json', leads);
+}
+
+async function getSentLog() {
+  if (db) {
+    return await db.collection('sentlog').find({}).toArray();
+  }
+  return readJSON('sent_log.json', []);
+}
+
+async function saveSentLog(log) {
+  if (db) {
+    await db.collection('sentlog').deleteMany({});
+    if (log.length > 0) await db.collection('sentlog').insertMany(log);
+    return;
+  }
+  writeJSON('sent_log.json', log);
+}
+
+async function addSentLogEntry(entry) {
+  if (db) {
+    await db.collection('sentlog').insertOne(entry);
+    return;
+  }
+  const log = readJSON('sent_log.json', []);
+  log.push(entry);
+  writeJSON('sent_log.json', log);
+}
+
 function getConfig() {
-  return readJSON('config.json', {
-    emailUser: process.env.EMAIL_USER || '',
-    emailPass: process.env.EMAIL_PASS || '',
-    emailFromName: process.env.EMAIL_FROM_NAME || 'NexBrothers',
-    googleApiKey: process.env.GOOGLE_PLACES_API_KEY || '',
-    hunterApiKey: process.env.HUNTER_API_KEY || '',
-    defaultMaxResults: 20,
-    whatsappDelay: 15
-  });
+  const fileConfig = readJSON('config.json', {});
+  return {
+    emailUser: fileConfig.emailUser || process.env.EMAIL_USER || '',
+    emailPass: fileConfig.emailPass || process.env.EMAIL_PASS || '',
+    emailFromName: fileConfig.emailFromName || process.env.EMAIL_FROM_NAME || 'NexBrothers',
+    googleApiKey: fileConfig.googleApiKey || process.env.GOOGLE_PLACES_API_KEY || '',
+    hunterApiKey: fileConfig.hunterApiKey || process.env.HUNTER_API_KEY || '',
+    defaultMaxResults: fileConfig.defaultMaxResults || 20,
+    whatsappDelay: fileConfig.whatsappDelay || 15
+  };
 }
 function saveConfig(config) { writeJSON('config.json', config); }
 
@@ -64,9 +138,9 @@ let websiteAnalyzer = null;
 // ===== API Routes =====
 
 // Stats
-app.get('/api/stats', (req, res) => {
-  const leads = getLeads();
-  const log = getSentLog();
+app.get('/api/stats', async (req, res) => {
+  const leads = await getLeads();
+  const log = await getSentLog();
   res.json({
     totalLeads: leads.length,
     newLeads: leads.filter(l => l.status === 'new').length,
@@ -88,8 +162,8 @@ app.get('/api/stats', (req, res) => {
 });
 
 // Leads CRUD
-app.get('/api/leads', (req, res) => {
-  let leads = getLeads();
+app.get('/api/leads', async (req, res) => {
+  let leads = await getLeads();
   const { category, city, status, search, sortBy, page = 1, limit = 50,
           hasWebsite, hasPhone, hasEmail, messageSent, emailSent } = req.query;
 
@@ -126,31 +200,31 @@ app.get('/api/leads', (req, res) => {
   res.json({ leads: paginated, total, page: parseInt(page), totalPages: Math.ceil(total / limit) });
 });
 
-app.get('/api/leads/:id', (req, res) => {
-  const leads = getLeads();
+app.get('/api/leads/:id', async (req, res) => {
+  const leads = await getLeads();
   const lead = leads.find(l => l.id === req.params.id);
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
   res.json(lead);
 });
 
-app.put('/api/leads/:id', (req, res) => {
-  const leads = getLeads();
+app.put('/api/leads/:id', async (req, res) => {
+  const leads = await getLeads();
   const idx = leads.findIndex(l => l.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Lead not found' });
   leads[idx] = { ...leads[idx], ...req.body };
-  saveLeads(leads);
+  await saveLeads(leads);
   res.json(leads[idx]);
 });
 
-app.delete('/api/leads/:id', (req, res) => {
-  let leads = getLeads();
+app.delete('/api/leads/:id', async (req, res) => {
+  let leads = await getLeads();
   leads = leads.filter(l => l.id !== req.params.id);
-  saveLeads(leads);
+  await saveLeads(leads);
   res.json({ success: true });
 });
 
-app.delete('/api/leads', (req, res) => {
-  saveLeads([]);
+app.delete('/api/leads', async (req, res) => {
+  await saveLeads([]);
   res.json({ success: true });
 });
 
@@ -159,8 +233,8 @@ app.get('/api/categories', (req, res) => res.json(getAllCategories()));
 app.get('/api/regions', (req, res) => res.json(getAllRegions()));
 
 // Message Preview
-app.get('/api/message-preview/:id', (req, res) => {
-  const leads = getLeads();
+app.get('/api/message-preview/:id', async (req, res) => {
+  const leads = await getLeads();
   const lead = leads.find(l => l.id === req.params.id);
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
@@ -169,8 +243,8 @@ app.get('/api/message-preview/:id', (req, res) => {
 });
 
 // Generate Landing Page
-app.post('/api/landing-page/:id', (req, res) => {
-  const leads = getLeads();
+app.post('/api/landing-page/:id', async (req, res) => {
+  const leads = await getLeads();
   const lead = leads.find(l => l.id === req.params.id);
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
@@ -179,30 +253,31 @@ app.post('/api/landing-page/:id', (req, res) => {
   // Update lead with landing page URL
   const idx = leads.findIndex(l => l.id === req.params.id);
   leads[idx].landingPageUrl = url;
-  saveLeads(leads);
+  await saveLeads(leads);
 
   res.json({ url });
 });
 
-// Serve Landing Pages
-app.get('/landing/:id', (req, res) => {
-  const filePath = path.join(DATA_DIR, 'landing-pages', `${req.params.id}.html`);
-  if (fs.existsSync(filePath)) {
-    res.sendFile(filePath);
-  } else {
-    // Try to generate it
-    const leads = getLeads();
-    const lead = leads.find(l => l.id === req.params.id);
-    if (!lead) return res.status(404).send('Page not found');
-    generateLandingPage(lead, BASE_URL);
-    res.sendFile(filePath);
-  }
+// Serve Landing Pages — generate on-the-fly (works on Render where filesystem resets)
+app.get('/landing/:id', async (req, res) => {
+  const leads = await getLeads();
+  const lead = leads.find(l => l.id === req.params.id);
+  if (!lead) return res.status(404).send(`
+    <html><body style="font-family:sans-serif;text-align:center;padding:80px 20px;">
+      <h1>Page Not Found</h1>
+      <p>This landing page is no longer available.</p>
+      <a href="/" style="color:#25d366;">Go to Dashboard</a>
+    </body></html>
+  `);
+  generateLandingPage(lead, BASE_URL);
+  const filePath = path.join(DATA_DIR, 'landing-pages', `${lead.id}.html`);
+  res.sendFile(filePath);
 });
 
 // Send Email
 app.post('/api/send-email/:id', async (req, res) => {
   const config = getConfig();
-  const leads = getLeads();
+  const leads = await getLeads();
   const lead = leads.find(l => l.id === req.params.id);
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
@@ -243,12 +318,10 @@ app.post('/api/send-email/:id', async (req, res) => {
     const idx = leads.findIndex(l => l.id === req.params.id);
     leads[idx].emailSent = true;
     leads[idx].status = leads[idx].status === 'new' ? 'contacted' : leads[idx].status;
-    saveLeads(leads);
+    await saveLeads(leads);
 
     // Log
-    const log = getSentLog();
-    log.push({ leadId: lead.id, leadName: lead.name, type: 'email', to: targetEmail, sentAt: new Date().toISOString() });
-    saveSentLog(log);
+    await addSentLogEntry({ leadId: lead.id, leadName: lead.name, type: 'email', to: targetEmail, sentAt: new Date().toISOString() });
 
     res.json({ success: true, message: 'Email sent' });
   } catch (err) {
@@ -270,7 +343,7 @@ app.post('/api/bulk-email', async (req, res) => {
     return res.status(400).json({ error: 'Email not configured. Add EMAIL_USER and EMAIL_PASS in Settings or Render environment variables.' });
   }
 
-  const leads = getLeads();
+  const leads = await getLeads();
   const targets = leadIds ? leads.filter(l => leadIds.includes(l.id)) : [];
 
   if (targets.length === 0) {
@@ -342,8 +415,8 @@ app.post('/api/bulk-email', async (req, res) => {
     }
   }
 
-  saveLeads(leads);
-  saveSentLog(log);
+  await saveLeads(leads);
+  await saveSentLog(log);
   res.json({ success: true, sent, failed, skipped, total: targets.length, errors: errors.slice(0, 5) });
 });
 
@@ -439,8 +512,8 @@ app.put('/api/config', (req, res) => {
 });
 
 // Sent Log
-app.get('/api/sent-log', (req, res) => {
-  const log = getSentLog();
+app.get('/api/sent-log', async (req, res) => {
+  const log = await getSentLog();
   res.json(log.reverse().slice(0, 100));
 });
 
@@ -459,7 +532,7 @@ io.on('connection', (socket) => {
     }
 
     placesWorker = new PlacesWorker(config.googleApiKey);
-    const existingLeads = getLeads();
+    const existingLeads = await getLeads();
 
     socket.emit('search-started', { categories, cities });
 
@@ -469,9 +542,9 @@ io.on('connection', (socket) => {
       maxPerCombo: maxPerCombo || config.defaultMaxResults,
       existingLeads,
       onProgress: (progress) => socket.emit('search-progress', progress),
-      onLead: (lead) => {
+      onLead: async (lead) => {
         existingLeads.push(lead);
-        saveLeads(existingLeads);
+        await saveLead(lead);
         socket.emit('search-lead', lead);
       },
       onComplete: (leads) => {
@@ -489,7 +562,7 @@ io.on('connection', (socket) => {
   // Analyze websites
   socket.on('analyze-websites', async (data) => {
     const { leadIds } = data;
-    const leads = getLeads();
+    const leads = await getLeads();
     const toAnalyze = leadIds ? leads.filter(l => leadIds.includes(l.id)) : leads.filter(l => l.website && !l.websiteAnalysis);
 
     if (toAnalyze.length === 0) {
@@ -505,30 +578,28 @@ io.on('connection', (socket) => {
     });
 
     // Update leads with analysis results
-    const allLeads = getLeads();
+    const allLeads = await getLeads();
     for (const result of results) {
       if (!result.analysis) continue;
       const idx = allLeads.findIndex(l => l.id === result.leadId);
       if (idx !== -1) {
         allLeads[idx].websiteAnalysis = result.analysis;
-        // Update email if found
         if (result.analysis.emails.length > 0 && !allLeads[idx].email) {
           allLeads[idx].email = result.analysis.emails[0];
         }
-        // Update score
         allLeads[idx].score = WebsiteAnalyzer.updateScore(allLeads[idx]);
       }
     }
-    saveLeads(allLeads);
+    await saveLeads(allLeads);
 
     await websiteAnalyzer.close();
     socket.emit('analyze-complete', { analyzed: results.filter(r => r.analysis).length });
   });
 
   // Generate landing pages for leads
-  socket.on('generate-landing-pages', (data) => {
+  socket.on('generate-landing-pages', async (data) => {
     const { leadIds } = data;
-    const leads = getLeads();
+    const leads = await getLeads();
     const toGenerate = leadIds ? leads.filter(l => leadIds.includes(l.id)) : leads;
 
     let generated = 0;
@@ -539,35 +610,33 @@ io.on('connection', (socket) => {
       generated++;
       socket.emit('landing-page-progress', { current: generated, total: toGenerate.length, leadName: lead.name });
     }
-    saveLeads(leads);
+    await saveLeads(leads);
     socket.emit('landing-pages-complete', { generated });
   });
 
   // Mark lead status
-  socket.on('update-lead-status', (data) => {
+  socket.on('update-lead-status', async (data) => {
     const { leadId, status } = data;
-    const leads = getLeads();
+    const leads = await getLeads();
     const idx = leads.findIndex(l => l.id === leadId);
     if (idx !== -1) {
       leads[idx].status = status;
-      saveLeads(leads);
+      await saveLeads(leads);
       socket.emit('lead-updated', leads[idx]);
     }
   });
 
   // WhatsApp link generated (log it)
-  socket.on('whatsapp-opened', (data) => {
+  socket.on('whatsapp-opened', async (data) => {
     const { leadId } = data;
-    const leads = getLeads();
+    const leads = await getLeads();
     const idx = leads.findIndex(l => l.id === leadId);
     if (idx !== -1) {
       leads[idx].messageSent = true;
       leads[idx].status = leads[idx].status === 'new' ? 'contacted' : leads[idx].status;
-      saveLeads(leads);
+      await saveLead(leads[idx]);
 
-      const log = getSentLog();
-      log.push({ leadId, leadName: leads[idx].name, type: 'whatsapp', sentAt: new Date().toISOString() });
-      saveSentLog(log);
+      await addSentLogEntry({ leadId, leadName: leads[idx].name, type: 'whatsapp', sentAt: new Date().toISOString() });
 
       socket.emit('lead-updated', leads[idx]);
     }
@@ -579,8 +648,13 @@ io.on('connection', (socket) => {
 });
 
 // ===== Start Server =====
-server.listen(PORT, () => {
-  console.log(`\n🚀 Find Client Dashboard running at ${BASE_URL}`);
-  console.log(`📊 Dashboard: ${BASE_URL}`);
-  console.log(`🔌 API: ${BASE_URL}/api\n`);
-});
+async function start() {
+  await connectDB();
+  server.listen(PORT, () => {
+    console.log(`\n🚀 Find Client Dashboard running at ${BASE_URL}`);
+    console.log(`📊 Dashboard: ${BASE_URL}`);
+    console.log(`🔌 API: ${BASE_URL}/api\n`);
+  });
+}
+
+start();
