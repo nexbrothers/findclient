@@ -23,30 +23,92 @@ const BASE_URL = process.env.RENDER_EXTERNAL_URL || process.env.BASE_URL || `htt
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ===== Data Helpers (MongoDB + File Fallback) =====
-const { MongoClient } = require('mongodb');
+// ===== Data Helpers (JSONBin.io + File Fallback) =====
+const axios = require('axios');
 
 const DATA_DIR = path.join(__dirname, 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(path.join(DATA_DIR, 'landing-pages'), { recursive: true });
 
-// MongoDB connection
-let db = null;
-const MONGO_URI = process.env.MONGO_URI || '';
+// JSONBin.io config
+const JSONBIN_KEY = process.env.JSONBIN_KEY || '';
+const JSONBIN_LEADS_ID = process.env.JSONBIN_LEADS_ID || '';
+const JSONBIN_LOG_ID = process.env.JSONBIN_LOG_ID || '';
+const JSONBIN_URL = 'https://api.jsonbin.io/v3/b';
+
+// In-memory cache to reduce API calls
+let leadsCache = null;
+let logCache = null;
+let leadsCacheDirty = false;
+let logCacheDirty = false;
+
+// Auto-save dirty cache every 10 seconds
+setInterval(async () => {
+  if (leadsCacheDirty && leadsCache && JSONBIN_KEY && JSONBIN_LEADS_ID) {
+    try {
+      await axios.put(`${JSONBIN_URL}/${JSONBIN_LEADS_ID}`, leadsCache, {
+        headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY }
+      });
+      leadsCacheDirty = false;
+    } catch (e) { console.error('JSONBin leads sync error:', e.message); }
+  }
+  if (logCacheDirty && logCache && JSONBIN_KEY && JSONBIN_LOG_ID) {
+    try {
+      await axios.put(`${JSONBIN_URL}/${JSONBIN_LOG_ID}`, logCache, {
+        headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY }
+      });
+      logCacheDirty = false;
+    } catch (e) { console.error('JSONBin log sync error:', e.message); }
+  }
+}, 10000);
 
 async function connectDB() {
-  if (!MONGO_URI) {
-    console.log('⚠️  No MONGO_URI set — using local file storage (data lost on Render redeploy)');
+  if (!JSONBIN_KEY) {
+    console.log('⚠️  No JSONBIN_KEY set — using local file storage (data lost on Render redeploy)');
     return;
   }
+
+  // Create bins if IDs not set
+  if (!JSONBIN_LEADS_ID || !JSONBIN_LOG_ID) {
+    console.log('⚠️  JSONBIN_LEADS_ID or JSONBIN_LOG_ID not set. Create bins first (see console).');
+    try {
+      if (!JSONBIN_LEADS_ID) {
+        const res = await axios.post(JSONBIN_URL, [], {
+          headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY, 'X-Bin-Name': 'findclient-leads' }
+        });
+        console.log(`✅ Created leads bin. Add to env: JSONBIN_LEADS_ID=${res.data.metadata.id}`);
+      }
+      if (!JSONBIN_LOG_ID) {
+        const res = await axios.post(JSONBIN_URL, [], {
+          headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY, 'X-Bin-Name': 'findclient-log' }
+        });
+        console.log(`✅ Created log bin. Add to env: JSONBIN_LOG_ID=${res.data.metadata.id}`);
+      }
+    } catch (e) { console.error('JSONBin create error:', e.message); }
+    return;
+  }
+
+  // Load initial data from JSONBin
   try {
-    const client = new MongoClient(MONGO_URI);
-    await client.connect();
-    db = client.db('findclient');
-    console.log('✅ Connected to MongoDB Atlas');
-  } catch (err) {
-    console.error('❌ MongoDB connection failed:', err.message);
-    db = null;
+    const [leadsRes, logRes] = await Promise.all([
+      axios.get(`${JSONBIN_URL}/${JSONBIN_LEADS_ID}/latest`, {
+        headers: { 'X-Master-Key': JSONBIN_KEY }
+      }),
+      axios.get(`${JSONBIN_URL}/${JSONBIN_LOG_ID}/latest`, {
+        headers: { 'X-Master-Key': JSONBIN_KEY }
+      })
+    ]);
+    leadsCache = Array.isArray(leadsRes.data.record) ? leadsRes.data.record : [];
+    logCache = Array.isArray(logRes.data.record) ? logRes.data.record : [];
+    // Also save locally as backup
+    writeJSON('leads.json', leadsCache);
+    writeJSON('sent_log.json', logCache);
+    console.log(`✅ Connected to JSONBin.io — ${leadsCache.length} leads, ${logCache.length} log entries loaded`);
+  } catch (e) {
+    console.error('JSONBin load error:', e.message);
+    // Fall back to local files
+    leadsCache = readJSON('leads.json', []);
+    logCache = readJSON('sent_log.json', []);
   }
 }
 
@@ -63,58 +125,40 @@ function writeJSON(file, data) {
   fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(data, null, 2), 'utf-8');
 }
 
-// --- Unified data functions (MongoDB if available, else file) ---
+// --- Unified data functions ---
 async function getLeads() {
-  if (db) {
-    return await db.collection('leads').find({}).toArray();
-  }
+  if (leadsCache !== null) return leadsCache;
   return readJSON('leads.json', []);
 }
 
 async function saveLeads(leads) {
-  if (db) {
-    await db.collection('leads').deleteMany({});
-    if (leads.length > 0) await db.collection('leads').insertMany(leads);
-    return;
-  }
-  writeJSON('leads.json', leads);
+  leadsCache = leads;
+  leadsCacheDirty = true;
+  writeJSON('leads.json', leads); // local backup
 }
 
 async function saveLead(lead) {
-  if (db) {
-    await db.collection('leads').updateOne({ id: lead.id }, { $set: lead }, { upsert: true });
-    return;
-  }
-  const leads = readJSON('leads.json', []);
+  const leads = await getLeads();
   const idx = leads.findIndex(l => l.id === lead.id);
   if (idx !== -1) leads[idx] = lead; else leads.push(lead);
-  writeJSON('leads.json', leads);
+  await saveLeads(leads);
 }
 
 async function getSentLog() {
-  if (db) {
-    return await db.collection('sentlog').find({}).toArray();
-  }
+  if (logCache !== null) return logCache;
   return readJSON('sent_log.json', []);
 }
 
 async function saveSentLog(log) {
-  if (db) {
-    await db.collection('sentlog').deleteMany({});
-    if (log.length > 0) await db.collection('sentlog').insertMany(log);
-    return;
-  }
-  writeJSON('sent_log.json', log);
+  logCache = log;
+  logCacheDirty = true;
+  writeJSON('sent_log.json', log); // local backup
 }
 
 async function addSentLogEntry(entry) {
-  if (db) {
-    await db.collection('sentlog').insertOne(entry);
-    return;
-  }
-  const log = readJSON('sent_log.json', []);
+  const log = await getSentLog();
   log.push(entry);
-  writeJSON('sent_log.json', log);
+  await saveSentLog(log);
 }
 
 function getConfig() {
