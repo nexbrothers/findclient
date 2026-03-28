@@ -210,6 +210,14 @@ app.post('/api/send-email/:id', async (req, res) => {
   if (!targetEmail) return res.status(400).json({ error: 'No email address' });
 
   try {
+    const emailUser = config.emailUser || process.env.EMAIL_USER;
+    const emailPass = config.emailPass || process.env.EMAIL_PASS;
+    const emailFromName = config.emailFromName || process.env.EMAIL_FROM_NAME || 'NexBrothers';
+
+    if (!emailUser || !emailPass) {
+      return res.status(400).json({ error: 'Email not configured. Add credentials in Settings.' });
+    }
+
     // Generate landing page first
     const landingUrl = generateLandingPage(lead, BASE_URL);
     const emailData = generateEmailMessage(lead);
@@ -220,11 +228,11 @@ app.post('/api/send-email/:id', async (req, res) => {
       host: 'smtp.gmail.com',
       port: 465,
       secure: true,
-      auth: { user: config.emailUser, pass: config.emailPass }
+      auth: { user: emailUser, pass: emailPass }
     });
 
     await transporter.sendMail({
-      from: `"${config.emailFromName}" <${config.emailUser}>`,
+      from: `"${emailFromName}" <${emailUser}>`,
       to: targetEmail,
       subject: emailData.subject,
       text: emailData.text,
@@ -251,10 +259,15 @@ app.post('/api/send-email/:id', async (req, res) => {
 // Bulk Email Send
 app.post('/api/bulk-email', async (req, res) => {
   const config = getConfig();
-  const { leadIds, serviceType } = req.body;
+  const { leadIds, serviceType, customEmails } = req.body;
 
-  if (!config.emailUser || !config.emailPass) {
-    return res.status(400).json({ error: 'Email not configured. Go to Settings.' });
+  // Use env vars as fallback if config.json doesn't have credentials
+  const emailUser = config.emailUser || process.env.EMAIL_USER;
+  const emailPass = config.emailPass || process.env.EMAIL_PASS;
+  const emailFromName = config.emailFromName || process.env.EMAIL_FROM_NAME || 'NexBrothers';
+
+  if (!emailUser || !emailPass) {
+    return res.status(400).json({ error: 'Email not configured. Add EMAIL_USER and EMAIL_PASS in Settings or Render environment variables.' });
   }
 
   const leads = getLeads();
@@ -268,16 +281,26 @@ app.post('/api/bulk-email', async (req, res) => {
     host: 'smtp.gmail.com',
     port: 465,
     secure: true,
-    auth: { user: config.emailUser, pass: config.emailPass }
+    auth: { user: emailUser, pass: emailPass }
   });
+
+  // Verify SMTP connection first
+  try {
+    await transporter.verify();
+  } catch (err) {
+    return res.status(500).json({ error: `Gmail SMTP failed: ${err.message}. Check your EMAIL_USER and EMAIL_PASS (must be App Password, not regular password).` });
+  }
 
   let sent = 0;
   let failed = 0;
+  let skipped = 0;
+  const errors = [];
   const log = getSentLog();
 
   for (const lead of targets) {
-    const targetEmail = lead.email || req.body.fallbackEmail;
-    if (!targetEmail) { failed++; continue; }
+    // Email priority: custom email map > lead.email
+    const targetEmail = (customEmails && customEmails[lead.id]) || lead.email;
+    if (!targetEmail) { skipped++; continue; }
 
     try {
       const landingUrl = generateLandingPage(lead, BASE_URL);
@@ -292,7 +315,7 @@ app.post('/api/bulk-email', async (req, res) => {
       emailData.text = emailData.text.replace(/{landingPageUrl}/g, landingUrl);
 
       await transporter.sendMail({
-        from: `"${config.emailFromName}" <${config.emailUser}>`,
+        from: `"${emailFromName}" <${emailUser}>`,
         to: targetEmail,
         subject: emailData.subject,
         text: emailData.text,
@@ -303,6 +326,7 @@ app.post('/api/bulk-email', async (req, res) => {
       const idx = leads.findIndex(l => l.id === lead.id);
       if (idx !== -1) {
         leads[idx].emailSent = true;
+        leads[idx].email = leads[idx].email || targetEmail;
         leads[idx].status = leads[idx].status === 'new' ? 'contacted' : leads[idx].status;
       }
 
@@ -313,13 +337,14 @@ app.post('/api/bulk-email', async (req, res) => {
       await new Promise(r => setTimeout(r, 2000));
     } catch (err) {
       console.error(`Bulk email error for ${lead.name}:`, err.message);
+      errors.push({ lead: lead.name, error: err.message });
       failed++;
     }
   }
 
   saveLeads(leads);
   saveSentLog(log);
-  res.json({ success: true, sent, failed, total: targets.length });
+  res.json({ success: true, sent, failed, skipped, total: targets.length, errors: errors.slice(0, 5) });
 });
 
 // Generate website development email

@@ -576,13 +576,25 @@ function getCurrentFilterParams() {
 async function bulkSendEmail() {
   if (selectedLeadIds.size === 0) return toast('Select leads first', 'error');
 
+  // Check how many have emails
+  const leadsRes = await fetch('/api/leads?limit=10000');
+  const leadsData = await leadsRes.json();
+  const selected = leadsData.leads.filter(l => selectedLeadIds.has(l.id));
+  const withEmail = selected.filter(l => l.email);
+  const withoutEmail = selected.filter(l => !l.email);
+
   const serviceType = document.getElementById('bulk-service-type').value;
   const label = serviceType === 'website' ? 'Website Development' : 'WhatsApp Automation';
 
-  if (!confirm(`Send ${label} pitch email to ${selectedLeadIds.size} leads?`)) return;
+  let msg = `Send ${label} pitch email to ${withEmail.length} leads with email?`;
+  if (withoutEmail.length > 0) {
+    msg += `\n\n${withoutEmail.length} leads have NO email and will be skipped.\n(Use "Analyze Websites" to find emails, or add them manually)`;
+  }
+
+  if (!confirm(msg)) return;
 
   const statusEl = document.getElementById('bulk-status');
-  statusEl.textContent = `Sending emails... 0/${selectedLeadIds.size}`;
+  statusEl.textContent = `Sending emails... 0/${withEmail.length}`;
 
   try {
     const res = await fetch('/api/bulk-email', {
@@ -596,8 +608,18 @@ async function bulkSendEmail() {
     const data = await res.json();
 
     if (data.success) {
-      toast(`Sent ${data.sent} emails! (${data.failed} failed)`, data.failed > 0 ? 'info' : 'success');
-      statusEl.textContent = `Done! Sent: ${data.sent}, Failed: ${data.failed}`;
+      let resultMsg = `Sent: ${data.sent}`;
+      if (data.skipped > 0) resultMsg += `, Skipped (no email): ${data.skipped}`;
+      if (data.failed > 0) resultMsg += `, Failed: ${data.failed}`;
+
+      toast(resultMsg, data.sent > 0 ? 'success' : 'error');
+      statusEl.textContent = resultMsg;
+
+      if (data.errors && data.errors.length > 0) {
+        console.error('Bulk email errors:', data.errors);
+        toast('Error: ' + data.errors[0].error, 'error');
+      }
+
       deselectAllLeads();
       loadLeads();
     } else {
@@ -610,35 +632,70 @@ async function bulkSendEmail() {
   }
 }
 
+let bulkWaQueue = [];
+let bulkWaIndex = 0;
+
 function bulkOpenWhatsApp() {
   if (selectedLeadIds.size === 0) return toast('Select leads first', 'error');
-  if (selectedLeadIds.size > 20) return toast('Max 20 at a time for WhatsApp (opens browser tabs)', 'error');
 
   const serviceType = document.getElementById('bulk-service-type').value;
 
-  // Fetch selected leads and open wa.me links
-  fetch(`/api/leads?limit=10000`).then(r => r.json()).then(data => {
+  fetch('/api/leads?limit=10000').then(r => r.json()).then(data => {
     const selected = data.leads.filter(l => selectedLeadIds.has(l.id) && l.phone);
     if (selected.length === 0) return toast('No selected leads have phone numbers', 'error');
 
-    let opened = 0;
-    selected.forEach((lead, i) => {
-      setTimeout(() => {
-        const phone = lead.phone.replace(/[\s\-\(\)\+]/g, '');
-        let msg;
-        if (serviceType === 'website') {
-          msg = `Hi! I came across ${lead.name} and noticed you don't have a website yet. In 2026, 70% of customers search online before visiting. I can build you a professional website with online booking, WhatsApp chat, and Google optimization. Would you like to see a quick preview?`;
-        } else {
-          msg = `Hi! I came across ${lead.name} online — great reviews! I help businesses like yours automate customer communication on WhatsApp — bookings, orders, support, all automated. Would you be open to a free 5-minute demo?`;
-        }
-        window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
-        socket.emit('whatsapp-opened', { leadId: lead.id });
-        opened++;
-      }, i * 1500); // 1.5s delay between opens
+    // Build queue of wa.me links
+    bulkWaQueue = selected.map(lead => {
+      const phone = lead.phone.replace(/[\s\-\(\)\+]/g, '');
+      let msg;
+      if (serviceType === 'website') {
+        msg = `Hi! I came across ${lead.name} and noticed you don't have a website yet. In 2026, 70% of customers search online before visiting. I can build you a professional website with online booking, WhatsApp chat, and Google optimization. Would you like to see a quick preview?`;
+      } else {
+        msg = `Hi! I came across ${lead.name} online — great reviews! I help businesses like yours automate customer communication on WhatsApp — bookings, orders, support, all automated. Would you be open to a free 5-minute demo?`;
+      }
+      return { lead, url: `https://wa.me/${phone}?text=${encodeURIComponent(msg)}` };
     });
+    bulkWaIndex = 0;
 
-    toast(`Opening ${selected.length} WhatsApp chats...`, 'info');
+    // Show WhatsApp sender panel
+    showWaSenderPanel();
   });
+}
+
+function showWaSenderPanel() {
+  const item = bulkWaQueue[bulkWaIndex];
+  if (!item) return toast('All WhatsApp messages done!', 'success');
+
+  const statusEl = document.getElementById('bulk-status');
+  statusEl.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 0;">
+      <strong>WhatsApp ${bulkWaIndex + 1}/${bulkWaQueue.length}:</strong>
+      <span>${item.lead.name}</span>
+      <a href="${item.url}" target="_blank" class="btn btn-sm" style="background:#25d366;color:white;text-decoration:none;"
+         onclick="onWaSent()">
+        💬 Open & Send
+      </a>
+      <button class="btn btn-outline btn-sm" onclick="skipWaLead()">Skip</button>
+      <button class="btn btn-danger btn-sm" onclick="stopBulkWa()">Stop</button>
+    </div>
+  `;
+}
+
+function onWaSent() {
+  const item = bulkWaQueue[bulkWaIndex];
+  if (item) socket.emit('whatsapp-opened', { leadId: item.lead.id });
+  bulkWaIndex++;
+  setTimeout(() => showWaSenderPanel(), 500);
+}
+
+function skipWaLead() {
+  bulkWaIndex++;
+  showWaSenderPanel();
+}
+
+function stopBulkWa() {
+  document.getElementById('bulk-status').textContent = `Stopped. Sent ${bulkWaIndex} of ${bulkWaQueue.length}`;
+  bulkWaQueue = [];
 }
 
 // Close modal on click outside
