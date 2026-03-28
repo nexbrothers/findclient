@@ -46,18 +46,23 @@ let logCacheDirty = false;
 setInterval(async () => {
   if (leadsCacheDirty && leadsCache && JSONBIN_KEY && JSONBIN_LEADS_ID) {
     try {
-      await axios.put(`${JSONBIN_URL}/${JSONBIN_LEADS_ID}`, leadsCache, {
+      // JSONBin needs non-empty body — wrap in object if empty
+      const body = leadsCache.length > 0 ? leadsCache : { leads: [] };
+      await axios.put(`${JSONBIN_URL}/${JSONBIN_LEADS_ID}`, body, {
         headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY }
       });
       leadsCacheDirty = false;
+      console.log(`📦 Synced ${leadsCache.length} leads to JSONBin`);
     } catch (e) { console.error('JSONBin leads sync error:', e.message); }
   }
   if (logCacheDirty && logCache && JSONBIN_KEY && JSONBIN_LOG_ID) {
     try {
-      await axios.put(`${JSONBIN_URL}/${JSONBIN_LOG_ID}`, logCache, {
+      const body = logCache.length > 0 ? logCache : { log: [] };
+      await axios.put(`${JSONBIN_URL}/${JSONBIN_LOG_ID}`, body, {
         headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY }
       });
       logCacheDirty = false;
+      console.log(`📦 Synced ${logCache.length} log entries to JSONBin`);
     } catch (e) { console.error('JSONBin log sync error:', e.message); }
   }
 }, 10000);
@@ -68,23 +73,8 @@ async function connectDB() {
     return;
   }
 
-  // Create bins if IDs not set
   if (!JSONBIN_LEADS_ID || !JSONBIN_LOG_ID) {
-    console.log('⚠️  JSONBIN_LEADS_ID or JSONBIN_LOG_ID not set. Create bins first (see console).');
-    try {
-      if (!JSONBIN_LEADS_ID) {
-        const res = await axios.post(JSONBIN_URL, [], {
-          headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY, 'X-Bin-Name': 'findclient-leads' }
-        });
-        console.log(`✅ Created leads bin. Add to env: JSONBIN_LEADS_ID=${res.data.metadata.id}`);
-      }
-      if (!JSONBIN_LOG_ID) {
-        const res = await axios.post(JSONBIN_URL, [], {
-          headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY, 'X-Bin-Name': 'findclient-log' }
-        });
-        console.log(`✅ Created log bin. Add to env: JSONBIN_LOG_ID=${res.data.metadata.id}`);
-      }
-    } catch (e) { console.error('JSONBin create error:', e.message); }
+    console.log('⚠️  JSONBIN_LEADS_ID or JSONBIN_LOG_ID not set.');
     return;
   }
 
@@ -98,15 +88,15 @@ async function connectDB() {
         headers: { 'X-Master-Key': JSONBIN_KEY }
       })
     ]);
-    leadsCache = Array.isArray(leadsRes.data.record) ? leadsRes.data.record : [];
-    logCache = Array.isArray(logRes.data.record) ? logRes.data.record : [];
-    // Also save locally as backup
+    const leadsData = leadsRes.data.record;
+    const logData = logRes.data.record;
+    leadsCache = Array.isArray(leadsData) ? leadsData : (leadsData?.leads || []);
+    logCache = Array.isArray(logData) ? logData : (logData?.log || []);
     writeJSON('leads.json', leadsCache);
     writeJSON('sent_log.json', logCache);
     console.log(`✅ Connected to JSONBin.io — ${leadsCache.length} leads, ${logCache.length} log entries loaded`);
   } catch (e) {
     console.error('JSONBin load error:', e.message);
-    // Fall back to local files
     leadsCache = readJSON('leads.json', []);
     logCache = readJSON('sent_log.json', []);
   }
