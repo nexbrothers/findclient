@@ -659,19 +659,23 @@ function bulkOpenWhatsApp() {
     bulkWaIndex = 0;
     bulkWaSent = 0;
 
-    showWaSenderPanel();
+    // Open WhatsApp Web in one tab first
+    window.open('https://web.whatsapp.com', '_blank');
+    toast('WhatsApp Web opened! Keep that tab open. Use the panel below to send messages.', 'info');
+
+    setTimeout(() => showWaSenderPanel(), 1000);
   });
 }
 
 function showWaSenderPanel() {
   const statusEl = document.getElementById('bulk-status');
 
-  // Done
   if (bulkWaIndex >= bulkWaQueue.length) {
     statusEl.innerHTML = `
-      <div style="text-align:center;padding:20px;">
-        <div style="font-size:32px;margin-bottom:8px;">✅</div>
-        <div style="font-size:18px;font-weight:700;color:var(--success);">All Done! Sent ${bulkWaSent} messages</div>
+      <div style="text-align:center;padding:30px;">
+        <div style="font-size:40px;margin-bottom:10px;">✅</div>
+        <div style="font-size:20px;font-weight:700;color:var(--success);">All Done! Sent ${bulkWaSent} of ${bulkWaQueue.length}</div>
+        <button class="btn btn-primary" onclick="closeBulkWa()" style="margin-top:12px;">Close</button>
       </div>`;
     toast(`Bulk WhatsApp done! Sent ${bulkWaSent}`, 'success');
     deselectAllLeads();
@@ -680,62 +684,76 @@ function showWaSenderPanel() {
   }
 
   const item = bulkWaQueue[bulkWaIndex];
-  const remaining = bulkWaQueue.length - bulkWaIndex;
   const progress = ((bulkWaIndex) / bulkWaQueue.length) * 100;
 
   statusEl.innerHTML = `
-    <div style="background:var(--card);border:2px solid var(--accent);border-radius:12px;padding:20px;margin:10px 0;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-        <div style="font-size:13px;color:var(--text-light);">
-          <strong style="color:var(--primary);font-size:16px;">${bulkWaIndex + 1}</strong> of ${bulkWaQueue.length}
-          &nbsp;•&nbsp; Sent: <strong style="color:var(--success);">${bulkWaSent}</strong>
-          &nbsp;•&nbsp; Remaining: ${remaining}
+    <div style="background:var(--card);border:2px solid var(--accent);border-radius:16px;padding:24px;margin:10px 0;">
+
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div style="font-weight:700;font-size:15px;color:var(--primary);">
+          ${bulkWaIndex + 1} / ${bulkWaQueue.length} &nbsp;•&nbsp;
+          <span style="color:var(--success);">Sent: ${bulkWaSent}</span>
         </div>
         <button class="btn btn-danger btn-sm" onclick="closeBulkWa()">✕ Close</button>
       </div>
 
-      <div class="progress-bar-bg" style="margin-bottom:16px;">
+      <div class="progress-bar-bg" style="margin-bottom:20px;">
         <div class="progress-bar-fill" style="width:${progress}%"></div>
       </div>
 
-      <div style="display:flex;gap:16px;align-items:center;margin-bottom:12px;">
-        <div style="width:48px;height:48px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:22px;color:white;font-weight:700;">
-          ${item.lead.name.charAt(0)}
-        </div>
-        <div>
-          <div style="font-size:17px;font-weight:700;">${item.lead.name}</div>
-          <div style="font-size:13px;color:var(--text-light);">${item.lead.city} • ${item.lead.category} • ⭐ ${item.lead.rating || 'N/A'}</div>
-          <div style="font-size:14px;color:var(--primary);font-weight:600;">${item.phone}</div>
-        </div>
-      </div>
-
-      <div style="background:#e5ddd5;border-radius:10px;padding:14px;font-size:13px;line-height:1.5;max-height:120px;overflow-y:auto;margin-bottom:16px;white-space:pre-wrap;">${item.msg.substring(0, 200)}...</div>
-
-      <div style="display:flex;gap:10px;">
-        <a href="${item.url}" target="_blank" class="btn btn-lg" onclick="onWaSent()"
-           style="background:#25d366;color:white;text-decoration:none;flex:1;justify-content:center;font-size:16px;padding:14px;">
-          💬 Send on WhatsApp
-        </a>
-        <button class="btn btn-outline btn-lg" onclick="skipWaLead()" style="padding:14px 20px;">
-          Skip ➜
+      <!-- Step 1: Phone Number -->
+      <div style="background:#e8f5e9;border:2px solid #25d366;border-radius:12px;padding:16px;margin-bottom:14px;text-align:center;">
+        <div style="font-size:12px;color:var(--text-light);margin-bottom:4px;font-weight:600;">STEP 1 — Search this number in WhatsApp Web</div>
+        <div style="font-size:28px;font-weight:800;color:var(--primary);letter-spacing:1px;" id="wa-phone-display">${item.phone}</div>
+        <div style="font-size:13px;font-weight:600;margin-top:4px;">${item.lead.name} — ${item.lead.city}</div>
+        <button class="btn btn-primary btn-sm" onclick="copyToClip('${item.phone}')" style="margin-top:8px;">
+          📋 Copy Number
         </button>
       </div>
 
-      <div style="font-size:11px;color:var(--text-light);margin-top:10px;text-align:center;">
-        Click "Send on WhatsApp" → send in WhatsApp → come back → click next one
+      <!-- Step 2: Message -->
+      <div style="background:#fff3e0;border:2px solid #f39c12;border-radius:12px;padding:16px;margin-bottom:14px;">
+        <div style="font-size:12px;color:var(--text-light);margin-bottom:8px;font-weight:600;">STEP 2 — Paste this message in the chat</div>
+        <div style="background:#e5ddd5;border-radius:8px;padding:12px;font-size:12px;line-height:1.5;max-height:100px;overflow-y:auto;white-space:pre-wrap;margin-bottom:10px;" id="wa-msg-display">${item.msg}</div>
+        <button class="btn btn-accent" onclick="copyWaBulkMsg()" style="width:100%;justify-content:center;font-size:15px;padding:10px;">
+          📋 Copy Message & Mark Sent
+        </button>
+      </div>
+
+      <!-- Step 3: Next -->
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-outline btn-lg" onclick="skipWaLead()" style="flex:1;justify-content:center;">
+          Skip ➜
+        </button>
+        <button class="btn btn-lg" onclick="nextWaLead()" style="flex:2;justify-content:center;background:var(--primary);color:white;font-size:16px;">
+          ✅ Sent! Next Lead ➜
+        </button>
+      </div>
+
+      <div style="font-size:11px;color:var(--text-light);margin-top:12px;text-align:center;line-height:1.6;">
+        Copy number → search in WhatsApp Web → Copy message → paste → send → click "Next Lead"
       </div>
     </div>
   `;
 }
 
-function onWaSent() {
+function copyToClip(text) {
+  navigator.clipboard.writeText(text);
+  toast('Copied!', 'success');
+}
+
+function copyWaBulkMsg() {
   const item = bulkWaQueue[bulkWaIndex];
-  if (item) {
-    socket.emit('whatsapp-opened', { leadId: item.lead.id });
-    bulkWaSent++;
-  }
+  if (!item) return;
+  navigator.clipboard.writeText(item.msg);
+  toast('Message copied! Paste it in WhatsApp', 'success');
+  socket.emit('whatsapp-opened', { leadId: item.lead.id });
+  bulkWaSent++;
+}
+
+function nextWaLead() {
   bulkWaIndex++;
-  setTimeout(() => showWaSenderPanel(), 300);
+  showWaSenderPanel();
 }
 
 function skipWaLead() {
@@ -744,7 +762,7 @@ function skipWaLead() {
 }
 
 function closeBulkWa() {
-  document.getElementById('bulk-status').innerHTML = `<span style="color:var(--text-light);">Stopped. Sent: ${bulkWaSent} / ${bulkWaQueue.length}</span>`;
+  document.getElementById('bulk-status').innerHTML = '';
   bulkWaQueue = [];
 }
 
