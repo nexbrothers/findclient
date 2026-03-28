@@ -12,11 +12,22 @@ class PlacesWorker {
     this.running = false;
   }
 
-  async search({ categories, cities, maxPerCombo = 20, onProgress, onLead, onComplete, onError }) {
+  async search({ categories, cities, maxPerCombo = 20, existingLeads = [], onProgress, onLead, onComplete, onError }) {
     this.running = true;
     const allLeads = [];
     const seenPhones = new Set();
+    const seenPlaceIds = new Set();
+    const seenNames = new Set();
     const totalCombos = categories.length * cities.length;
+
+    // Pre-load existing leads to prevent duplicates across searches
+    if (existingLeads) {
+      for (const el of existingLeads) {
+        if (el.phone) seenPhones.add(el.phone);
+        if (el.placeId) seenPlaceIds.add(el.placeId);
+        seenNames.add(`${el.name.toLowerCase().trim()}__${el.city.toLowerCase().trim()}`);
+      }
+    }
     let completedCombos = 0;
 
     try {
@@ -44,6 +55,15 @@ class PlacesWorker {
               // Deduplicate by phone
               if (lead.phone && seenPhones.has(lead.phone)) continue;
               if (lead.phone) seenPhones.add(lead.phone);
+
+              // Deduplicate by placeId
+              if (lead.placeId && seenPlaceIds.has(lead.placeId)) continue;
+              if (lead.placeId) seenPlaceIds.add(lead.placeId);
+
+              // Deduplicate by name+city combo
+              const nameKey = `${lead.name.toLowerCase().trim()}__${lead.city.toLowerCase().trim()}`;
+              if (seenNames.has(nameKey)) continue;
+              seenNames.add(nameKey);
 
               lead.searchCategory = category;
               allLeads.push(lead);

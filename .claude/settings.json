@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(chmod +x /home/anuj/Desktop/nexBrotherss/find-client/deploy.sh)"
+      "Bash(chmod +x /home/anuj/Desktop/nexBrotherss/find-client/deploy.sh)",
+      "Bash(node -c /home/anuj/Desktop/nexBrotherss/find-client/server.js)",
+      "Bash(node -c /home/anuj/Desktop/nexBrotherss/find-client/workers/places-worker.js)",
+      "Bash(node -c /home/anuj/Desktop/nexBrotherss/find-client/public/js/app.js)"
     ]
   }
 }

@@ -113,6 +113,23 @@
         </div>
       </div>
 
+      <div class="panel">
+        <div class="panel-header"><h3>What Service Are You Selling?</h3></div>
+        <div class="panel-body">
+          <div style="display: flex; gap: 12px;">
+            <div class="checkbox-item checked" onclick="selectServiceType(this, 'whatsapp')" data-value="whatsapp">
+              <span class="check-box">✓</span>
+              <span>📱 WhatsApp Automation</span>
+            </div>
+            <div class="checkbox-item" onclick="selectServiceType(this, 'website')" data-value="website">
+              <span class="check-box">✓</span>
+              <span>🌐 Website Development</span>
+            </div>
+          </div>
+          <p style="font-size:12px;color:var(--text-light);margin-top:8px;">This changes the pitch messages sent to leads.</p>
+        </div>
+      </div>
+
       <div style="display: flex; gap: 12px; margin-bottom: 20px;">
         <button class="btn btn-accent btn-lg" id="btn-start-search" onclick="startSearch()">🚀 Start Finding Leads</button>
         <button class="btn btn-danger btn-lg" id="btn-stop-search" onclick="stopSearch()" style="display:none;">⏹ Stop</button>
@@ -153,11 +170,47 @@
           <option value="converted">Converted</option>
           <option value="rejected">Rejected</option>
         </select>
+        <select id="filter-website" onchange="loadLeads()">
+          <option value="">Website: All</option>
+          <option value="no">❌ No Website</option>
+          <option value="yes">✅ Has Website</option>
+        </select>
+        <select id="filter-phone" onchange="loadLeads()">
+          <option value="">Phone: All</option>
+          <option value="yes">✅ Has Phone</option>
+          <option value="no">❌ No Phone</option>
+        </select>
+        <select id="filter-email" onchange="loadLeads()">
+          <option value="">Email: All</option>
+          <option value="yes">✅ Has Email</option>
+          <option value="no">❌ No Email</option>
+        </select>
+        <select id="filter-msgsent" onchange="loadLeads()">
+          <option value="">Contacted: All</option>
+          <option value="no">Not Contacted</option>
+          <option value="yes">Already Contacted</option>
+        </select>
         <select id="filter-sort" onchange="loadLeads()">
           <option value="score">Sort: Score ↓</option>
           <option value="rating">Sort: Rating ↓</option>
           <option value="name">Sort: Name A-Z</option>
         </select>
+      </div>
+
+      <!-- Bulk Actions -->
+      <div class="panel" style="margin-bottom: 16px;">
+        <div class="panel-body" style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+          <label style="font-weight: 600; font-size: 14px;">Bulk Actions:</label>
+          <select id="bulk-service-type" style="width: auto;">
+            <option value="whatsapp">📱 WhatsApp Automation Pitch</option>
+            <option value="website">🌐 Website Development Pitch</option>
+          </select>
+          <button class="btn btn-primary" onclick="selectAllLeads()">☑ Select All</button>
+          <button class="btn btn-outline" onclick="deselectAllLeads()">☐ Deselect All</button>
+          <button class="btn btn-accent btn-lg" onclick="bulkSendEmail()">📧 Bulk Send Email (<span id="selected-count">0</span>)</button>
+          <button class="btn btn-lg" style="background:#25d366;color:white;" onclick="bulkOpenWhatsApp()">💬 Bulk WhatsApp (<span id="selected-wa-count">0</span>)</button>
+          <span id="bulk-status" style="font-size: 13px; color: var(--text-light);"></span>
+        </div>
       </div>
 
       <!-- Analyze Progress -->
@@ -176,6 +229,7 @@
             <table>
               <thead>
                 <tr>
+                  <th><input type="checkbox" id="select-all-check" onchange="toggleSelectAll(this.checked)" style="width:auto;"></th>
                   <th>Score</th>
                   <th>Business</th>
                   <th>Category</th>

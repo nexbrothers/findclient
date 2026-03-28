@@ -90,15 +90,28 @@ app.get('/api/stats', (req, res) => {
 // Leads CRUD
 app.get('/api/leads', (req, res) => {
   let leads = getLeads();
-  const { category, city, status, search, sortBy, page = 1, limit = 50 } = req.query;
+  const { category, city, status, search, sortBy, page = 1, limit = 50,
+          hasWebsite, hasPhone, hasEmail, messageSent, emailSent } = req.query;
 
   if (category) leads = leads.filter(l => l.category === category);
   if (city) leads = leads.filter(l => l.city.toLowerCase().includes(city.toLowerCase()));
   if (status) leads = leads.filter(l => l.status === status);
   if (search) leads = leads.filter(l =>
     l.name.toLowerCase().includes(search.toLowerCase()) ||
-    l.address.toLowerCase().includes(search.toLowerCase())
+    (l.address || '').toLowerCase().includes(search.toLowerCase())
   );
+
+  // Advanced filters
+  if (hasWebsite === 'yes') leads = leads.filter(l => l.website);
+  if (hasWebsite === 'no') leads = leads.filter(l => !l.website);
+  if (hasPhone === 'yes') leads = leads.filter(l => l.phone);
+  if (hasPhone === 'no') leads = leads.filter(l => !l.phone);
+  if (hasEmail === 'yes') leads = leads.filter(l => l.email);
+  if (hasEmail === 'no') leads = leads.filter(l => !l.email);
+  if (messageSent === 'yes') leads = leads.filter(l => l.messageSent);
+  if (messageSent === 'no') leads = leads.filter(l => !l.messageSent);
+  if (emailSent === 'yes') leads = leads.filter(l => l.emailSent);
+  if (emailSent === 'no') leads = leads.filter(l => !l.emailSent);
 
   // Sort
   if (sortBy === 'score') leads.sort((a, b) => b.score - a.score);
@@ -204,7 +217,9 @@ app.post('/api/send-email/:id', async (req, res) => {
     emailData.text = emailData.text.replace(/{landingPageUrl}/g, landingUrl);
 
     const transporter = nodemailer.createTransport({
-      service: 'gmail',
+      host: 'smtp.gmail.com',
+      port: 465,
+      secure: true,
       auth: { user: config.emailUser, pass: config.emailPass }
     });
 
@@ -232,6 +247,150 @@ app.post('/api/send-email/:id', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Bulk Email Send
+app.post('/api/bulk-email', async (req, res) => {
+  const config = getConfig();
+  const { leadIds, serviceType } = req.body;
+
+  if (!config.emailUser || !config.emailPass) {
+    return res.status(400).json({ error: 'Email not configured. Go to Settings.' });
+  }
+
+  const leads = getLeads();
+  const targets = leadIds ? leads.filter(l => leadIds.includes(l.id)) : [];
+
+  if (targets.length === 0) {
+    return res.status(400).json({ error: 'No leads selected' });
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true,
+    auth: { user: config.emailUser, pass: config.emailPass }
+  });
+
+  let sent = 0;
+  let failed = 0;
+  const log = getSentLog();
+
+  for (const lead of targets) {
+    const targetEmail = lead.email || req.body.fallbackEmail;
+    if (!targetEmail) { failed++; continue; }
+
+    try {
+      const landingUrl = generateLandingPage(lead, BASE_URL);
+      let emailData;
+
+      if (serviceType === 'website') {
+        emailData = generateWebsiteDevEmail(lead);
+      } else {
+        emailData = generateEmailMessage(lead);
+      }
+      emailData.html = emailData.html.replace(/{landingPageUrl}/g, landingUrl);
+      emailData.text = emailData.text.replace(/{landingPageUrl}/g, landingUrl);
+
+      await transporter.sendMail({
+        from: `"${config.emailFromName}" <${config.emailUser}>`,
+        to: targetEmail,
+        subject: emailData.subject,
+        text: emailData.text,
+        html: emailData.html
+      });
+
+      // Update lead
+      const idx = leads.findIndex(l => l.id === lead.id);
+      if (idx !== -1) {
+        leads[idx].emailSent = true;
+        leads[idx].status = leads[idx].status === 'new' ? 'contacted' : leads[idx].status;
+      }
+
+      log.push({ leadId: lead.id, leadName: lead.name, type: 'email', to: targetEmail, serviceType: serviceType || 'whatsapp', sentAt: new Date().toISOString() });
+      sent++;
+
+      // Delay between emails to avoid spam detection
+      await new Promise(r => setTimeout(r, 2000));
+    } catch (err) {
+      console.error(`Bulk email error for ${lead.name}:`, err.message);
+      failed++;
+    }
+  }
+
+  saveLeads(leads);
+  saveSentLog(log);
+  res.json({ success: true, sent, failed, total: targets.length });
+});
+
+// Generate website development email
+function generateWebsiteDevEmail(lead) {
+  const subject = `${lead.name} — you need a website`;
+  const html = `
+<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+  <p>Hi,</p>
+
+  <p>I came across <strong>${lead.name}</strong> on Google and noticed you don't have a website yet.</p>
+
+  <p>In 2026, <strong>70% of customers search online before visiting a business</strong>. Without a website, you're invisible to a huge chunk of potential customers.</p>
+
+  <p>Here's what I can build for <strong>${lead.name}</strong>:</p>
+
+  <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+    <tr style="border-bottom: 1px solid #eee;">
+      <td style="padding: 12px 8px; font-weight: bold; color: #2563eb;">🌐 Professional Website</td>
+      <td style="padding: 12px 8px;">Mobile-friendly, fast-loading website that showcases your business</td>
+    </tr>
+    <tr style="border-bottom: 1px solid #eee;">
+      <td style="padding: 12px 8px; font-weight: bold; color: #2563eb;">📱 Google My Business</td>
+      <td style="padding: 12px 8px;">Optimize your Google listing to appear higher in local searches</td>
+    </tr>
+    <tr style="border-bottom: 1px solid #eee;">
+      <td style="padding: 12px 8px; font-weight: bold; color: #2563eb;">💬 WhatsApp Integration</td>
+      <td style="padding: 12px 8px;">Let customers contact you instantly from your website</td>
+    </tr>
+    <tr style="border-bottom: 1px solid #eee;">
+      <td style="padding: 12px 8px; font-weight: bold; color: #2563eb;">📋 Online Booking/Menu</td>
+      <td style="padding: 12px 8px;">Customers can book appointments or view your services online</td>
+    </tr>
+  </table>
+
+  <p>I've prepared a quick preview of what your website & system could look like:</p>
+
+  <div style="text-align: center; margin: 25px 0;">
+    <a href="{landingPageUrl}" style="background: #2563eb; color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px;">
+      👉 See Your Website Preview
+    </a>
+  </div>
+
+  <p>Ready to get started? Reply to this email or click the link above.</p>
+
+  <p>Best regards,<br>
+  <strong>Anuj</strong><br>
+  NexBrothers — Web Development & Automation</p>
+
+  <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+  <p style="font-size: 11px; color: #999;">
+    You received this email because your business was listed on Google without a website.
+    If this isn't relevant, simply ignore this email.
+  </p>
+</div>`;
+
+  const text = `Hi,
+
+I came across ${lead.name} on Google and noticed you don't have a website yet.
+
+70% of customers search online before visiting a business. Without a website, you're missing out.
+
+I can build you: Professional Website, Google Optimization, WhatsApp Integration, Online Booking.
+
+See your preview: {landingPageUrl}
+
+Reply to get started!
+
+Best, Anuj — NexBrothers`;
+
+  return { subject, html, text };
+}
 
 // Config
 app.get('/api/config', (req, res) => {
@@ -283,15 +442,12 @@ io.on('connection', (socket) => {
       categories,
       cities,
       maxPerCombo: maxPerCombo || config.defaultMaxResults,
+      existingLeads,
       onProgress: (progress) => socket.emit('search-progress', progress),
       onLead: (lead) => {
-        // Check if already exists
-        const exists = existingLeads.some(l => l.placeId === lead.placeId || (l.phone && l.phone === lead.phone));
-        if (!exists) {
-          existingLeads.push(lead);
-          saveLeads(existingLeads);
-          socket.emit('search-lead', lead);
-        }
+        existingLeads.push(lead);
+        saveLeads(existingLeads);
+        socket.emit('search-lead', lead);
       },
       onComplete: (leads) => {
         socket.emit('search-complete', { total: existingLeads.length, newFound: leads.length });

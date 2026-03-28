@@ -2,6 +2,7 @@ const socket = io();
 let currentPage = 'dashboard';
 let currentLeadPage = 1;
 let currentModalLead = null;
+let selectedLeadIds = new Set();
 
 // ===== NAVIGATION =====
 document.querySelectorAll('.nav-item').forEach(item => {
@@ -139,6 +140,18 @@ function toggleCheck(el) {
   el.querySelector('input').checked = el.classList.contains('checked');
 }
 
+let selectedServiceType = 'whatsapp';
+
+function selectServiceType(el, type) {
+  selectedServiceType = type;
+  // Update UI
+  el.parentElement.querySelectorAll('.checkbox-item').forEach(item => item.classList.remove('checked'));
+  el.classList.add('checked');
+  // Sync bulk action dropdown
+  const bulkSelect = document.getElementById('bulk-service-type');
+  if (bulkSelect) bulkSelect.value = type;
+}
+
 function toggleAllCategories() {
   const items = document.querySelectorAll('#category-checkboxes .checkbox-item');
   const allChecked = Array.from(items).every(i => i.classList.contains('checked'));
@@ -223,27 +236,41 @@ async function loadLeads() {
   const category = document.getElementById('filter-category')?.value || '';
   const city = document.getElementById('filter-city')?.value || '';
   const status = document.getElementById('filter-status')?.value || '';
+  const hasWebsite = document.getElementById('filter-website')?.value || '';
+  const hasPhone = document.getElementById('filter-phone')?.value || '';
+  const hasEmail = document.getElementById('filter-email')?.value || '';
+  const messageSent = document.getElementById('filter-msgsent')?.value || '';
   const sortBy = document.getElementById('filter-sort')?.value || 'score';
 
-  const params = new URLSearchParams({ search, category, city, status, sortBy, page: currentLeadPage, limit: 50 });
+  const params = new URLSearchParams({
+    search, category, city, status, hasWebsite, hasPhone, hasEmail, messageSent,
+    sortBy, page: currentLeadPage, limit: 50
+  });
+  // Remove empty params
+  for (const [key, val] of [...params.entries()]) {
+    if (!val) params.delete(key);
+  }
+
   const res = await fetch(`/api/leads?${params}`);
   const data = await res.json();
 
   const tbody = document.getElementById('leads-table-body');
 
   if (data.leads.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="icon">🔍</div><p>No leads found. Try a different filter or search for new leads!</p></div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state"><div class="icon">🔍</div><p>No leads found. Try a different filter or search for new leads!</p></div></td></tr>';
     return;
   }
 
   tbody.innerHTML = data.leads.map(lead => `
     <tr>
+      <td><input type="checkbox" class="lead-checkbox" data-id="${lead.id}" style="width:auto;" ${selectedLeadIds.has(lead.id) ? 'checked' : ''} onchange="toggleLeadSelect('${lead.id}', this.checked)"></td>
       <td><span class="score-badge ${lead.score >= 12 ? 'score-hot' : lead.score >= 8 ? 'score-warm' : 'score-cold'}">${lead.score}</span></td>
       <td>
         <div style="font-weight:600;">${lead.name}</div>
-        <div style="font-size:12px;color:var(--text-light);">${lead.address?.substring(0, 40) || ''}...</div>
-        ${lead.website ? `<a href="${lead.website}" target="_blank" style="font-size:11px;">🌐 Website</a>` : '<span style="font-size:11px;color:var(--danger);">No website</span>'}
+        <div style="font-size:12px;color:var(--text-light);">${(lead.address || '').substring(0, 40)}...</div>
+        ${lead.website ? `<a href="${lead.website}" target="_blank" style="font-size:11px;">🌐 Website</a>` : '<span style="font-size:11px;color:var(--danger);">❌ No website</span>'}
         ${lead.email ? `<span style="font-size:11px;color:var(--success);margin-left:8px;">📧 ${lead.email}</span>` : ''}
+        ${lead.messageSent ? '<span style="font-size:11px;color:var(--info);margin-left:8px;">✓ Contacted</span>' : ''}
       </td>
       <td><span style="font-size:13px;">${lead.category}</span></td>
       <td>${lead.city}</td>
@@ -281,7 +308,7 @@ async function loadLeads() {
     pagEl.innerHTML = '';
   }
 
-  // Update filter dropdowns with available options
+  updateSelectedCount();
   updateFilterOptions(data);
 }
 
@@ -468,6 +495,151 @@ async function saveSettings() {
 socket.on('lead-updated', (lead) => {
   if (currentPage === 'leads') loadLeads();
 });
+
+// ===== BULK ACTIONS =====
+function toggleLeadSelect(leadId, checked) {
+  if (checked) {
+    selectedLeadIds.add(leadId);
+  } else {
+    selectedLeadIds.delete(leadId);
+  }
+  updateSelectedCount();
+}
+
+function toggleSelectAll(checked) {
+  document.querySelectorAll('.lead-checkbox').forEach(cb => {
+    cb.checked = checked;
+    if (checked) {
+      selectedLeadIds.add(cb.dataset.id);
+    } else {
+      selectedLeadIds.delete(cb.dataset.id);
+    }
+  });
+  updateSelectedCount();
+}
+
+function selectAllLeads() {
+  // Select all leads matching current filters (fetch all IDs)
+  const params = getCurrentFilterParams();
+  params.set('limit', '10000');
+  fetch(`/api/leads?${params}`).then(r => r.json()).then(data => {
+    selectedLeadIds = new Set(data.leads.map(l => l.id));
+    document.querySelectorAll('.lead-checkbox').forEach(cb => {
+      cb.checked = selectedLeadIds.has(cb.dataset.id);
+    });
+    const selectAllCheck = document.getElementById('select-all-check');
+    if (selectAllCheck) selectAllCheck.checked = true;
+    updateSelectedCount();
+    toast(`Selected ${selectedLeadIds.size} leads`, 'success');
+  });
+}
+
+function deselectAllLeads() {
+  selectedLeadIds.clear();
+  document.querySelectorAll('.lead-checkbox').forEach(cb => cb.checked = false);
+  const selectAllCheck = document.getElementById('select-all-check');
+  if (selectAllCheck) selectAllCheck.checked = false;
+  updateSelectedCount();
+}
+
+function updateSelectedCount() {
+  const el = document.getElementById('selected-count');
+  const waEl = document.getElementById('selected-wa-count');
+  if (el) el.textContent = selectedLeadIds.size;
+  if (waEl) waEl.textContent = selectedLeadIds.size;
+}
+
+function getCurrentFilterParams() {
+  const params = new URLSearchParams();
+  const search = document.getElementById('filter-search')?.value || '';
+  const category = document.getElementById('filter-category')?.value || '';
+  const city = document.getElementById('filter-city')?.value || '';
+  const status = document.getElementById('filter-status')?.value || '';
+  const hasWebsite = document.getElementById('filter-website')?.value || '';
+  const hasPhone = document.getElementById('filter-phone')?.value || '';
+  const hasEmail = document.getElementById('filter-email')?.value || '';
+  const messageSent = document.getElementById('filter-msgsent')?.value || '';
+  const sortBy = document.getElementById('filter-sort')?.value || 'score';
+
+  if (search) params.set('search', search);
+  if (category) params.set('category', category);
+  if (city) params.set('city', city);
+  if (status) params.set('status', status);
+  if (hasWebsite) params.set('hasWebsite', hasWebsite);
+  if (hasPhone) params.set('hasPhone', hasPhone);
+  if (hasEmail) params.set('hasEmail', hasEmail);
+  if (messageSent) params.set('messageSent', messageSent);
+  params.set('sortBy', sortBy);
+  return params;
+}
+
+async function bulkSendEmail() {
+  if (selectedLeadIds.size === 0) return toast('Select leads first', 'error');
+
+  const serviceType = document.getElementById('bulk-service-type').value;
+  const label = serviceType === 'website' ? 'Website Development' : 'WhatsApp Automation';
+
+  if (!confirm(`Send ${label} pitch email to ${selectedLeadIds.size} leads?`)) return;
+
+  const statusEl = document.getElementById('bulk-status');
+  statusEl.textContent = `Sending emails... 0/${selectedLeadIds.size}`;
+
+  try {
+    const res = await fetch('/api/bulk-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        leadIds: Array.from(selectedLeadIds),
+        serviceType
+      })
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      toast(`Sent ${data.sent} emails! (${data.failed} failed)`, data.failed > 0 ? 'info' : 'success');
+      statusEl.textContent = `Done! Sent: ${data.sent}, Failed: ${data.failed}`;
+      deselectAllLeads();
+      loadLeads();
+    } else {
+      toast(data.error || 'Failed to send', 'error');
+      statusEl.textContent = data.error || 'Error';
+    }
+  } catch (err) {
+    toast('Error: ' + err.message, 'error');
+    statusEl.textContent = 'Error: ' + err.message;
+  }
+}
+
+function bulkOpenWhatsApp() {
+  if (selectedLeadIds.size === 0) return toast('Select leads first', 'error');
+  if (selectedLeadIds.size > 20) return toast('Max 20 at a time for WhatsApp (opens browser tabs)', 'error');
+
+  const serviceType = document.getElementById('bulk-service-type').value;
+
+  // Fetch selected leads and open wa.me links
+  fetch(`/api/leads?limit=10000`).then(r => r.json()).then(data => {
+    const selected = data.leads.filter(l => selectedLeadIds.has(l.id) && l.phone);
+    if (selected.length === 0) return toast('No selected leads have phone numbers', 'error');
+
+    let opened = 0;
+    selected.forEach((lead, i) => {
+      setTimeout(() => {
+        const phone = lead.phone.replace(/[\s\-\(\)\+]/g, '');
+        let msg;
+        if (serviceType === 'website') {
+          msg = `Hi! I came across ${lead.name} and noticed you don't have a website yet. In 2026, 70% of customers search online before visiting. I can build you a professional website with online booking, WhatsApp chat, and Google optimization. Would you like to see a quick preview?`;
+        } else {
+          msg = `Hi! I came across ${lead.name} online — great reviews! I help businesses like yours automate customer communication on WhatsApp — bookings, orders, support, all automated. Would you be open to a free 5-minute demo?`;
+        }
+        window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
+        socket.emit('whatsapp-opened', { leadId: lead.id });
+        opened++;
+      }, i * 1500); // 1.5s delay between opens
+    });
+
+    toast(`Opening ${selected.length} WhatsApp chats...`, 'info');
+  });
+}
 
 // Close modal on click outside
 document.getElementById('message-modal').addEventListener('click', (e) => {
